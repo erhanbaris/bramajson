@@ -22,6 +22,8 @@ bramajson_object* BRAMAJSON_ARRAY_ASSERT(char const* json_content, int32_t expec
 
 int main()
 {
+    BRAMAJSON_VALIDATE_ASSERT("{'erhan': 123}", BRAMAJSON_SUCCESS);
+
     bramajson_object* output = NULL;
     output = BRAMAJSON_ARRAY_ASSERT("[\"erhan\", \"baris\"]", BRAMAJSON_SUCCESS, 2);
     assert(strcmp("erhan", output->_array->items[0]->_string) == 0);
@@ -56,10 +58,12 @@ int main()
 
 
     BRAMAJSON_VALIDATE_ASSERT(NULL, BRAMAJSON_CONTENT_EMPTY);
+    BRAMAJSON_VALIDATE_ASSERT("'erhan'", BRAMAJSON_SUCCESS);
     BRAMAJSON_VALIDATE_ASSERT("[]", BRAMAJSON_SUCCESS);
     BRAMAJSON_VALIDATE_ASSERT("[", BRAMAJSON_JSON_NOT_VALID);
     BRAMAJSON_VALIDATE_ASSERT("]", BRAMAJSON_JSON_NOT_VALID);
     BRAMAJSON_VALIDATE_ASSERT("{}", BRAMAJSON_SUCCESS);
+    BRAMAJSON_VALIDATE_ASSERT("{'erhan': 1}", BRAMAJSON_SUCCESS);
     BRAMAJSON_VALIDATE_ASSERT("{", BRAMAJSON_JSON_NOT_VALID);
     BRAMAJSON_VALIDATE_ASSERT("}", BRAMAJSON_JSON_NOT_VALID);
     BRAMAJSON_VALIDATE_ASSERT("{]", BRAMAJSON_JSON_NOT_VALID);
@@ -74,6 +78,17 @@ int main()
     BRAMAJSON_VALIDATE_ASSERT("false", BRAMAJSON_SUCCESS);
     BRAMAJSON_VALIDATE_ASSERT("null", BRAMAJSON_SUCCESS);
     BRAMAJSON_ARRAY_ASSERT("[[[[[[[[[[[[1],1],1],1],1],1],1],1],1],1],1],1]", BRAMAJSON_SUCCESS, 2);
+    BRAMAJSON_VALIDATE_ASSERT("{\"menu\": {\n"
+                              "  \"id\": \"file\",\n"
+                              "  \"value\": \"File\",\n"
+                              "  \"popup\": {\n"
+                              "    \"menuitem\": [\n"
+                              "      {\"value\": \"New\", \"onclick\": \"CreateNewDoc()\"},\n"
+                              "      {\"value\": \"Open\", \"onclick\": \"OpenDoc()\"},\n"
+                              "      {\"value\": \"Close\", \"onclick\": \"CloseDoc()\"}\n"
+                              "    ]\n"
+                              "  }\n"
+                              "}}", BRAMAJSON_SUCCESS);
 
 	return 0;
 }

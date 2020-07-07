@@ -45,16 +45,22 @@ typedef struct _bramajson_array {
     bramajson_object** items;
 } bramajson_array;
 
+typedef struct _bramajson_dictionary {
+    size_t            size;
+    size_t            count;
+    bramajson_pair ** items;
+} bramajson_dictionary;
+
 typedef struct _bramajson_object {
     uint16_t type;
     union
     {
-        int32_t           _integer;
-        double            _double;
-        char*             _string;
-        bramajson_object* _object;
-        bramajson_pair*   _pair;
-        bramajson_array*  _array;
+        int32_t                _integer;
+        double                 _double;
+        char*                  _string;
+        bramajson_object*      _object;
+        bramajson_dictionary * _dictionary;
+        bramajson_array*       _array;
     };
 } bramajson_object;
 
@@ -122,22 +128,63 @@ bramajson_object* bramajson_parse_array(bramajson_context* context, int32_t* sta
 bramajson_object* bramajson_parse_dictionary(bramajson_context* context, int32_t* status) {
     increase_index();
 
-    char32_t chr       = get_char();
-    bool     end_found = false;
+    bramajson_dictionary * dict = (bramajson_dictionary*)malloc(sizeof(bramajson_dictionary));
+    bramajson_object* result    = (bramajson_object*)malloc(sizeof(bramajson_object));
+    dict->items                 = (bramajson_pair**)malloc(1 * sizeof(bramajson_pair*));
+    dict->count                 = 0;
+    dict->size                  = 1;
+    result->_dictionary         = dict;
+    result->type                = BRAMAJSON_DICT;
+
+    char32_t chr                = get_char();
+    bool     end_found          = false;
+
     do {
+        if (chr == '}') {
+            end_found = true;
+            break;
+        }
+
+        /* Use raw string */
+        bramajson_object* key = bramajson_parse_object(context, status);
+
         chr = get_char();
-        
+        if (':' != chr || *status != BRAMAJSON_SUCCESS) {
+            *status = BRAMAJSON_JSON_NOT_VALID;
+            return NULL;
+        }
+
+        increase_index();
+        bramajson_object* value = bramajson_parse_object(context, status);
+        chr = get_char();
+
         if (chr == '}')
             end_found = true;
+        else if (chr != ',')
+            *status = BRAMAJSON_JSON_NOT_VALID;
+
+        if (dict->count == dict->size) {
+            dict->size *= 2;
+            dict->items = (bramajson_pair**)realloc(dict->items, dict->size * sizeof(bramajson_pair*));
+        }
+
+        bramajson_pair* pair = (bramajson_pair*)malloc(sizeof(bramajson_pair));
+        pair->key = key->_string;
+        delete key;
+
+        pair->object               = value;
+        dict->items[dict->count++] = pair;
 
         increase_index();
     }
-    while(!is_end() && chr != '}');
+    while(BRAMAJSON_SUCCESS == *status && !is_end() && chr != '}');
 
-    if (false == end_found)
+    if (false == end_found) {
+        result  = NULL;
         *status = BRAMAJSON_JSON_NOT_VALID;
+    }
 
-    return (bramajson_object*)malloc(sizeof(bramajson_object));
+    return result;
 }
 
 bramajson_object* bramajson_parse_atom(bramajson_context* context, int32_t* status) {
@@ -166,7 +213,7 @@ bramajson_object* bramajson_parse_atom(bramajson_context* context, int32_t* stat
     return object;
 }
 
-bramajson_object* bramajson_parse_text(bramajson_context* context, int32_t* status) {
+bramajson_object* bramajson_parse_text(bramajson_context* context, int32_t* status, char opt) {
     increase_index();
 
     char chr      = get_char();
@@ -175,15 +222,15 @@ bramajson_object* bramajson_parse_text(bramajson_context* context, int32_t* stat
     size_t start  = context->cursor_index;
     bramajson_object* object = NULL;
 
-    while (!is_end() && chr != '"') {
+    while (!is_end() && chr != opt) {
         chr      = get_char();
         chr_next = get_next_char();
 
-        if (chr == '\\' && chr_next == '"') {
+        if (chr == '\\' && chr_next == opt) {
             ++length;
             increase_index();
         }
-        else if (chr == '"') {
+        else if (chr == opt) {
             increase_index();
             break;
         }
@@ -193,7 +240,7 @@ bramajson_object* bramajson_parse_text(bramajson_context* context, int32_t* stat
         increase_index();
     }
 
-    if (chr != '"') {
+    if (chr != opt) {
         *status = BRAMAJSON_JSON_NOT_VALID;
         return NULL;
     }
@@ -320,7 +367,11 @@ bramajson_object* bramajson_parse_object(bramajson_context* context, int32_t* st
     }
 
     else if (chr == '"') {
-        result = bramajson_parse_text(context, status);
+        result = bramajson_parse_text(context, status, '"');
+    }
+
+    else if (chr == '\'') {
+        result = bramajson_parse_text(context, status, '\'');
     }
 
     /* Parse dictionary */
