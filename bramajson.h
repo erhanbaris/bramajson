@@ -1,8 +1,9 @@
-﻿
+
 
 #pragma once
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
@@ -22,10 +23,18 @@
 #define BRAMAJSON_JSON_NOT_VALID  (1 << 2)
 #define BRAMAJSON_OUT_OF_MEMORY   (1 << 3)
 
-#define is_end()         (context->content_length <= context->cursor_index)
-#define get_char()       (context->json_content[context->cursor_index])
-#define get_next_char()  (context->content_length > (context->cursor_index + 1) ? context->json_content[context->cursor_index + 1] : 0)
-#define increase_index() do {++context->cursor_index;} while(0)
+#define is_end()               (context->content_length <= context->cursor_index)
+#define get_char()             (context->json_content[context->cursor_index])
+#define get_next_char()        (context->content_length > (context->cursor_index + 1) ? context->json_content[context->cursor_index + 1] : 0)
+#define increase_index()       do {++context->cursor_index; ++context->column_index;} while(0)
+#define increase_newline()     do {++context->newline_index; context->column_index = 0;} while(0)
+#define BRAMAJSON_MALLOC(size) bramajson_malloc(context, size)
+#define CLEANUP_WHITESPACES()  while (!is_end() && (chr == '\r' || chr == '\n' || chr == ' ' || chr == '\t')) {\
+        if (chr == '\n') \
+            increase_newline();\
+        increase_index();\
+        chr = get_char();\
+    }
 
 
 typedef struct _bramajson_object  bramajson_object;
@@ -69,7 +78,14 @@ typedef struct _bramajson_context {
     bool        validation;
     size_t      content_length;
     size_t      cursor_index;
+    size_t      newline_index;
+    size_t      column_index;
     char const* json_content;
+
+    /* Memory */
+    char*       memory_block;
+    size_t      memory_size;
+    size_t      memory_count;
 } bramajson_context;
 
 /* Public apis */
@@ -78,6 +94,19 @@ void              bramajson_destroy (bramajson_object* json_object, int32_t* sta
 
 /* Private */
 bramajson_object* bramajson_parse_object(bramajson_context* context, int32_t* status);
+bool              bramajson_get_text_block_info(bramajson_context* context, char opt, size_t* start, size_t* text_length);
+
+/* Memory */
+
+void* bramajson_malloc(bramajson_context* context, size_t size) {
+    if (size + context->memory_count > context->memory_count) {
+        context->memory_block = (char*)realloc(context->memory_block, context->memory_size * 2);
+        context->memory_size = context->memory_size * 2;
+    }
+
+    context->memory_count += size;
+    return (context->memory_block + (context->memory_count - size));
+}
 
 bramajson_object* bramajson_parse_array(bramajson_context* context, int32_t* status) {
     increase_index();
@@ -93,8 +122,13 @@ bramajson_object* bramajson_parse_array(bramajson_context* context, int32_t* sta
     char32_t chr             = get_char();
     bool     end_found       = false;
 
+    CLEANUP_WHITESPACES();
+
     do {
         if (chr == ']') {
+            increase_index();
+            chr = get_char();
+            CLEANUP_WHITESPACES();
             end_found = true;
             break;
         }
@@ -102,18 +136,27 @@ bramajson_object* bramajson_parse_array(bramajson_context* context, int32_t* sta
         bramajson_object* item = bramajson_parse_object(context, status);
         chr = get_char();
 
-        if (chr == ']')
-            end_found = true;
-        else if (chr != ',')
-            *status = BRAMAJSON_JSON_NOT_VALID;
-
         if (array->count == array->size) {
             array->size *= 2;
             array->items = (bramajson_object**)realloc(array->items, array->size * sizeof(bramajson_object*));
         }
 
         array->items[array->count++] = item;
-        increase_index();
+
+        if (chr == ']') {
+            increase_index();
+            chr = get_char();
+            CLEANUP_WHITESPACES();
+            end_found = true;
+            break;
+        }
+        else if (chr == ',') {
+            increase_index();
+            chr = get_char();
+            CLEANUP_WHITESPACES();
+        } else
+            *status = BRAMAJSON_JSON_NOT_VALID;
+
     }
     while(BRAMAJSON_SUCCESS == *status && !is_end() && chr != ']');
 
@@ -139,14 +182,38 @@ bramajson_object* bramajson_parse_dictionary(bramajson_context* context, int32_t
     char32_t chr                = get_char();
     bool     end_found          = false;
 
+    CLEANUP_WHITESPACES();
+
     do {
         if (chr == '}') {
+            increase_index();
+            chr = get_char();
+            CLEANUP_WHITESPACES();
             end_found = true;
             break;
         }
 
-        /* Use raw string */
-        bramajson_object* key = bramajson_parse_object(context, status);
+        CLEANUP_WHITESPACES();
+        char opt = get_char();
+
+        if (opt != '"' && opt != '\''){
+            *status = BRAMAJSON_JSON_NOT_VALID;
+            return NULL;
+        }
+
+        size_t key_length = 0;
+        size_t key_start  = 0;
+
+        if (bramajson_get_text_block_info(context, opt,  &key_start, &key_length) == false) {
+            *status = BRAMAJSON_JSON_NOT_VALID;
+            return NULL;
+        }
+
+        char* key = (char*)malloc(sizeof(char) * key_length + 1);
+        strncpy(key, context->json_content + key_start, key_length);
+        key[key_length] = '\0';
+        chr = get_char();
+        CLEANUP_WHITESPACES();
 
         chr = get_char();
         if (':' != chr || *status != BRAMAJSON_SUCCESS) {
@@ -158,24 +225,29 @@ bramajson_object* bramajson_parse_dictionary(bramajson_context* context, int32_t
         bramajson_object* value = bramajson_parse_object(context, status);
         chr = get_char();
 
-        if (chr == '}')
-            end_found = true;
-        else if (chr != ',')
-            *status = BRAMAJSON_JSON_NOT_VALID;
-
         if (dict->count == dict->size) {
             dict->size *= 2;
             dict->items = (bramajson_pair**)realloc(dict->items, dict->size * sizeof(bramajson_pair*));
         }
 
         bramajson_pair* pair = (bramajson_pair*)malloc(sizeof(bramajson_pair));
-        pair->key = key->_string;
-        delete key;
-
+        pair->key                  = key;
         pair->object               = value;
         dict->items[dict->count++] = pair;
 
-        increase_index();
+        if (chr == '}') {
+            increase_index();
+            chr = get_char();
+            CLEANUP_WHITESPACES();
+            end_found = true;
+            break;
+        }
+        else if (chr == ',') {
+            increase_index();
+            chr = get_char();
+            CLEANUP_WHITESPACES();
+        } else
+            *status = BRAMAJSON_JSON_NOT_VALID;
     }
     while(BRAMAJSON_SUCCESS == *status && !is_end() && chr != '}');
 
@@ -213,42 +285,56 @@ bramajson_object* bramajson_parse_atom(bramajson_context* context, int32_t* stat
     return object;
 }
 
-bramajson_object* bramajson_parse_text(bramajson_context* context, int32_t* status, char opt) {
+bool bramajson_get_text_block_info(bramajson_context* context, char opt, size_t* start, size_t* text_length) {
     increase_index();
 
     char chr      = get_char();
     char chr_next = get_next_char();
     size_t length = 0;
-    size_t start  = context->cursor_index;
-    bramajson_object* object = NULL;
+    *start        = context->cursor_index;
 
-    while (!is_end() && chr != opt) {
-        chr      = get_char();
-        chr_next = get_next_char();
-
-        if (chr == '\\' && chr_next == opt) {
-            ++length;
-            increase_index();
-        }
-        else if (chr == opt) {
-            increase_index();
-            break;
-        }
-        else
-            ++length;
-
+    if (chr == opt)
         increase_index();
-    }
+    else
+        while (!is_end() && chr != opt) {
+            chr      = get_char();
+            chr_next = get_next_char();
 
-    if (chr != opt) {
+            if (chr == '\\' && chr_next == opt) {
+                ++length;
+                increase_index();
+            }
+            else if (chr == opt) {
+                increase_index();
+                break;
+            }
+            else
+                ++length;
+
+            increase_index();
+        }
+
+    if (chr != opt)
+        return false;
+
+    *text_length = length;
+    return true;
+}
+
+bramajson_object* bramajson_parse_text(bramajson_context* context, int32_t* status, char opt) {
+    size_t length = 0;
+    size_t start  = 0;
+
+    if (bramajson_get_text_block_info(context, opt, &start, &length) == false) {
         *status = BRAMAJSON_JSON_NOT_VALID;
         return NULL;
     }
 
     bramajson_object* token = (bramajson_object*)malloc(sizeof (bramajson_object));
     token->type    = BRAMAJSON_STRING;
-    token->_string = (char*)malloc(sizeof(char) * length);
+    token->_string = (char*)malloc(sizeof(char) * length + 1);
     strncpy(token->_string, context->json_content + start, length);
+    token->_string[length] = '\0';
 
     return token;
 }
@@ -354,12 +440,7 @@ bramajson_object* bramajson_parse_object(bramajson_context* context, int32_t* st
     char32_t chr             = get_char();
     bramajson_object* result = NULL;
 
-    if (chr == '\r' || chr == '\n' || chr == ' ' || chr == '\t') {
-        while (!is_end() && (chr == '\r' || chr == '\n' || chr == ' ' || chr == '\t')) {
-            increase_index();
-            chr = get_char();
-        }
-    }
+    CLEANUP_WHITESPACES();
 
     /* Parse array */
     if (chr == '[') {
@@ -393,12 +474,9 @@ bramajson_object* bramajson_parse_object(bramajson_context* context, int32_t* st
     else
         *status = BRAMAJSON_JSON_NOT_VALID;
 
-    chr = get_char();
-    if (*status == BRAMAJSON_SUCCESS && (chr == '\r' || chr == '\n' || chr == ' ' || chr == '\t')) {
-        while (!is_end() && (chr == '\r' || chr == '\n' || chr == ' ' || chr == '\t')) {
-            increase_index();
-            chr = get_char();
-        }
+    if (*status == BRAMAJSON_SUCCESS) {
+        chr = get_char();
+        CLEANUP_WHITESPACES();
     }
 
     return result;
@@ -415,6 +493,14 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
     context->json_content      = json_content;
     context->content_length    = strlen(json_content);
     context->cursor_index      = 0;
+    context->newline_index     = 1;
+    context->column_index      = 0;
+
+    /* Prepare memory block */
+    context->memory_block      = (char*)malloc(sizeof(char) * 1024);
+    context->memory_size       = 1024;
+    context->memory_count      = 0;
+
     *status                    = BRAMAJSON_SUCCESS;
 
     bramajson_object*  object  = bramajson_parse_object(context, status);
