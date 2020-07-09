@@ -23,6 +23,11 @@
 #define BRAMAJSON_JSON_NOT_VALID  (1 << 2)
 #define BRAMAJSON_OUT_OF_MEMORY   (1 << 3)
 
+
+#define BRAMAJSON_POST_ACTION_ADD    (1 << 0)
+#define BRAMAJSON_POST_ACTION_REMOVE (1 << 1)
+#define BRAMAJSON_POST_ACTION_IDLE   (1 << 2)
+
 #define is_end()               (context->content_length <= context->cursor_index)
 #define get_char()             (context->json_content[context->cursor_index])
 #define get_next_char()        (context->content_length > (context->cursor_index + 1) ? context->json_content[context->cursor_index + 1] : 0)
@@ -61,7 +66,8 @@ typedef struct _bramajson_dictionary {
 } bramajson_dictionary;
 
 typedef struct _bramajson_object {
-    uint16_t type;
+    uint16_t          type;
+    bramajson_object* parent;
     union
     {
         int32_t                _integer;
@@ -503,9 +509,249 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
 
     *status                    = BRAMAJSON_SUCCESS;
 
-    bramajson_object*  object  = bramajson_parse_object(context, status);
+    bramajson_object** stack   = (bramajson_object**)malloc(1 * sizeof(bramajson_object*));
+    size_t stack_index         = 0;
+    size_t stack_size          = 1;
 
-    return object;
+    char32_t chr                  = NULL;
+    bramajson_object* last_object = NULL;
+
+    /* String variables */
+    size_t string_length  = 0;
+    size_t string_start   = 0;
+    bool string_in_buffer = false;
+    
+    bool deliminator_used = false;
+
+    while(!is_end() && BRAMAJSON_SUCCESS == *status) {
+        bramajson_object* object = NULL;
+        int16_t post_action      = BRAMAJSON_POST_ACTION_IDLE;
+        chr                      = get_char();
+        CLEANUP_WHITESPACES();
+
+        switch (chr)
+        {
+            /* Start array */
+            case '[': {
+                increase_index();
+
+                object                   = (bramajson_object*)malloc(sizeof(bramajson_object));
+                bramajson_array* array   = (bramajson_array*)malloc(sizeof(bramajson_array));
+                array->items             = (bramajson_object**)malloc(1 * sizeof(bramajson_object*));
+                array->count             = 0;
+                array->size              = 1;
+                object->_array           = array;
+                object->type             = BRAMAJSON_ARRAY;
+                bool     end_found       = false;
+
+                if (chr == ']') {
+                    increase_index();
+                    end_found = true;
+                }
+
+                /* Array parse not finished yet */
+                if (false == end_found)
+                    post_action = BRAMAJSON_POST_ACTION_ADD;
+
+                break;
+            }
+
+            /* Finish array */
+            case ']': {
+                if (NULL            == last_object || 
+                    BRAMAJSON_ARRAY != last_object->type ||
+                    true            == deliminator_used) {
+                    *status = BRAMAJSON_JSON_NOT_VALID;
+                    break;
+                }
+
+                increase_index();
+                post_action = BRAMAJSON_POST_ACTION_REMOVE;
+                break;
+            }
+
+            /* Deliminator */
+            case ',': {
+                if (true == deliminator_used ||
+                    NULL == last_object ||
+                    (BRAMAJSON_ARRAY != last_object->type && BRAMAJSON_DICT != last_object->type) ||
+                    (BRAMAJSON_ARRAY == last_object->type && last_object->_array->count == 0) ||
+                    (BRAMAJSON_DICT  == last_object->type && last_object->_dictionary->count == 0)) {
+                    *status = BRAMAJSON_JSON_NOT_VALID;
+                    break;
+                }
+
+                deliminator_used = true;
+                increase_index();
+                break;
+            }
+
+            /* Parse string */
+            case '"':
+            case'\'': {
+                increase_index();
+                CLEANUP_WHITESPACES();
+
+                char opt      = chr;
+                chr           = get_char();
+                char chr_next = get_next_char();
+                string_start  = context->cursor_index;
+                string_length = 0;
+
+                if (chr == opt)
+                    increase_index();
+                else
+                    while (!is_end() && chr != opt) {
+                        chr      = get_char();
+                        chr_next = get_next_char();
+
+                        if (chr == '\\' && chr_next == opt) {
+                            ++string_length;
+                            increase_index();
+                        }
+                        else if (chr == opt) {
+                            increase_index();
+                            break;
+                        }
+                        else
+                            ++string_length;
+
+                        increase_index();
+                    }
+
+                if (chr != opt) {
+                    *status = BRAMAJSON_JSON_NOT_VALID;
+                    break;
+                }
+
+                string_in_buffer = true;
+                break;
+            }
+
+            /* Parse dictionary */
+            case '{': {
+                //result = bramajson_parse_dictionary(context, status);
+                break;
+            }
+
+            /* Parse number */
+            case '-':
+            case '+':
+            case '0':
+            case '1':
+            case '2':
+            case '3':
+            case '4':
+            case '5':
+            case '6':
+            case '7':
+            case '8':
+            case '9': {
+                //result = bramajson_parse_number(context, status);
+                break;
+            }
+
+            /* Parse atom */
+            case 't':
+            case 'f':
+            case 'n': {
+                uint16_t type = BRAMAJSON_NULL;
+
+                if (0 == strncmp("false", context->cursor_index + context->json_content, 5)) {
+                    type = BRAMAJSON_FALSE;
+                    context->cursor_index +=5;
+                }
+                else if (0 == strncmp("true", context->cursor_index + context->json_content, 4)) {
+                    type = BRAMAJSON_TRUE;
+                    context->cursor_index +=4;
+                }
+                else if (0 == strncmp("null", context->cursor_index + context->json_content, 4)) {
+                    type = BRAMAJSON_NULL;
+                    context->cursor_index +=4;
+                } else
+                    *status = BRAMAJSON_JSON_NOT_VALID;
+
+                if (BRAMAJSON_SUCCESS == *status) {
+                    object         = (bramajson_object*)malloc(sizeof(bramajson_object));
+                    object->type   = type;
+                }
+
+                break;
+            }
+        
+            /* Parse issue */
+            default: {
+                *status = BRAMAJSON_JSON_NOT_VALID;
+                break;
+            }
+        }
+
+        /* Sometings went wrong, stop parser */
+        if (BRAMAJSON_SUCCESS != *status) break;
+
+        /* Check upper object is container */
+        if (NULL != last_object) {
+
+            /* String in fly */
+            if(BRAMAJSON_ARRAY == last_object->type && true == string_in_buffer) {
+                object          = (bramajson_object*)malloc(sizeof (bramajson_object));
+                object->type    = BRAMAJSON_STRING;
+                object->_string = (char*)malloc(sizeof(char) * string_length + 1);
+                strncpy(object->_string, context->json_content + string_start, string_length);
+                object->_string[string_length] = '\0';
+
+                string_start     = 0;
+                string_length    = 0;
+                string_in_buffer = false;
+            }
+
+            /* Object created and can be added to container */
+            if (NULL != object) {
+                switch (last_object->type) {
+                
+                    /* Upper object is array*/
+                    case BRAMAJSON_ARRAY: {
+                        if (last_object->_array->count == last_object->_array->size) {
+                            last_object->_array->size *= 2;
+                            last_object->_array->items = (bramajson_object**)realloc(last_object->_array->items, last_object->_array->size * sizeof(bramajson_object*));
+                        }
+
+                        last_object->_array->items[last_object->_array->count++] = object;
+                        object->parent                                           = last_object;
+                        deliminator_used                                         = false;
+                        break;
+                    }
+
+                    default:
+                        break;
+                }
+            }
+        }
+
+        /* Post actions after parsin code */
+        switch (post_action) {
+            case BRAMAJSON_POST_ACTION_ADD: {
+                if (stack_index == stack_size) {
+                    stack_size *= 2;
+                    stack = (bramajson_object**)realloc(stack, stack_size * sizeof(bramajson_object*));
+                }
+
+                stack[stack_index++] = object;
+                last_object          = object;
+                break;
+            }
+
+            case BRAMAJSON_POST_ACTION_REMOVE: {
+                --stack_index;
+                last_object = stack[stack_index - 1];
+                break;
+            }
+        }
+    }
+
+    if (BRAMAJSON_SUCCESS == *status)
+        return stack[0];
+    return NULL;
 }
 
 bramajson_object* bramajson_parse(char const* json_content, int32_t* status) {
