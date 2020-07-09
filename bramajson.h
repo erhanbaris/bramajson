@@ -151,12 +151,10 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
     
     bool deliminator_used    = false;
     bramajson_object* object = NULL;
-    chr                      = get_char();
-    CLEANUP_WHITESPACES();
 
     while(!is_end() && BRAMAJSON_SUCCESS == *status) {
         int16_t post_action      = BRAMAJSON_POST_ACTION_IDLE;
-
+        chr                      = get_char();
         object                   = NULL;
         CLEANUP_WHITESPACES();
 
