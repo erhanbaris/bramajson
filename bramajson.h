@@ -28,8 +28,8 @@
 #define BRAMAJSON_POST_ACTION_REMOVE (1 << 1)
 #define BRAMAJSON_POST_ACTION_IDLE   (1 << 2)
 
-#define is_end()               (*chr != (int)NULL)
-#define get_next_char()        (is_end() ? *(chr+1) : 0)
+#define is_end()               (*chr == (int)NULL)
+#define get_next_char()        (!is_end() ? *(chr+1) : (int)NULL)
 #define increase_index()       do {++chr;} while(0)
 #define increase_newline()     do {++context->newline_index;} while(0)
 #define valid_digit(c)         ((c) >= '0' && (c) <= '9')
@@ -239,6 +239,7 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
                 object->next             = NULL;
                 object->_array           = array;
                 object->type             = BRAMAJSON_ARRAY;
+                post_action              = BRAMAJSON_POST_ACTION_ADD;
                 break;
             }
 
@@ -288,9 +289,9 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
             /* Parse string */
             case '"':
             case'\'': {
-                increase_index();
-
                 char32_t opt  = *chr;
+
+                increase_index();
                 char chr_next = get_next_char();
                 string_start  = chr - context->json_content;
 
@@ -304,7 +305,6 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
                             increase_index();
                         }
                         else if (*chr == opt) {
-                            increase_index();
                             break;
                         }
 
@@ -335,6 +335,7 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
                 object->next                = NULL;
                 object->_dictionary         = dict;
                 object->type                = BRAMAJSON_DICT;
+                post_action                 = BRAMAJSON_POST_ACTION_ADD;
                 break;
             }
 
