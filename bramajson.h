@@ -29,16 +29,12 @@
 #define BRAMAJSON_POST_ACTION_IDLE   (1 << 2)
 
 #define is_end()               (*chr != (int)NULL)
-#define get_next_char()        (context->content_length > (context->cursor_index + 1) ? context->json_content[context->cursor_index + 1] : 0)
-#define increase_index()       do {++chr; ++context->cursor_index; ++context->column_index;} while(0)
-#define increase_newline()     do {++context->newline_index; context->column_index = 0;} while(0)
+#define get_next_char()        (is_end() ? *(chr+1) : 0)
+#define increase_index()       do {++chr;} while(0)
+#define increase_newline()     do {++context->newline_index;} while(0)
 #define valid_digit(c)         ((c) >= '0' && (c) <= '9')
 #define BRAMAJSON_MALLOC(size) bramajson_malloc(context, size)
-#define CLEANUP_WHITESPACES()  while (!is_end() && (*chr == '\r' || *chr == '\n' || *chr == ' ' || *chr == '\t')) {\
-    if (*chr == '\n') \
-        increase_newline();\
-    increase_index();\
-}
+#define CLEANUP_WHITESPACES()  while (!is_end() && (*chr == '\r' || *chr == '\n' || *chr == ' ' || *chr == '\t')) increase_index();
 
 
 typedef struct _bramajson_object  bramajson_object;
@@ -83,9 +79,7 @@ typedef struct _bramajson_object {
 
 typedef struct _bramajson_context {
     size_t      content_length;
-    size_t      cursor_index;
     size_t      newline_index;
-    size_t      column_index;
     char const* json_content;
 
     /* Memory */
@@ -197,9 +191,7 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
     bramajson_context* context = (bramajson_context*)malloc( sizeof(bramajson_context));
     context->json_content      = json_content;
     context->content_length    = strlen(json_content);
-    context->cursor_index      = 0;
     context->newline_index     = 1;
-    context->column_index      = 0;
 
     /* Prepare memory block */
     context->memory_blocks       = (char**)malloc(sizeof(char*));
@@ -228,7 +220,7 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
     bool deliminator_used    = false;
     bramajson_object* object = NULL;
 
-    while(!is_end() && BRAMAJSON_SUCCESS == *status) {
+    while(!is_end()) {
         int16_t post_action      = BRAMAJSON_POST_ACTION_IDLE;
         object                   = NULL;
         CLEANUP_WHITESPACES();
@@ -247,16 +239,6 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
                 object->next             = NULL;
                 object->_array           = array;
                 object->type             = BRAMAJSON_ARRAY;
-                bool     end_found       = false;
-
-                /* Array parse not finished yet */
-                if (*chr != ']')
-                    post_action = BRAMAJSON_POST_ACTION_ADD;
-                else {
-                    array->closed = true;
-                    increase_index();
-                }
-
                 break;
             }
 
@@ -265,8 +247,7 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
                 if (NULL            == last_object || 
                     BRAMAJSON_ARRAY != last_object->type ||
                     true            == deliminator_used) {
-                    *status = BRAMAJSON_JSON_NOT_VALID;
-                    break;
+                    goto brama_error;
                 }
 
                 last_object->_array->closed = true;
@@ -283,8 +264,7 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
                     (BRAMAJSON_ARRAY == last_object->type && NULL == last_object->_array->head) ||
                     (BRAMAJSON_DICT  == last_object->type && NULL == last_object->_dictionary->head) ||
                     (BRAMAJSON_DICT  == last_object->type && NULL != last_object->_dictionary->last_pair)) {
-                    *status = BRAMAJSON_JSON_NOT_VALID;
-                    break;
+                    goto brama_error;
                 }
 
                 deliminator_used = true;
@@ -297,8 +277,7 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
                 if (true == deliminator_used ||
                     NULL == last_object ||
                     BRAMAJSON_DICT != last_object->type) {
-                    *status = BRAMAJSON_JSON_NOT_VALID;
-                    break;
+                    goto brama_error;
                 }
 
                 deliminator_used = true;
@@ -310,38 +289,33 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
             case '"':
             case'\'': {
                 increase_index();
-                CLEANUP_WHITESPACES();
 
                 char32_t opt  = *chr;
                 char chr_next = get_next_char();
-                string_start  = context->cursor_index;
-                string_length = 0;
+                string_start  = chr - context->json_content;
 
                 if (*chr == opt)
                     increase_index();
                 else
-                    while (!is_end() && *chr != opt) {
+                    while (!is_end()) {
                         chr_next = get_next_char();
 
                         if (*chr == '\\' && chr_next == opt) {
-                            ++string_length;
                             increase_index();
                         }
                         else if (*chr == opt) {
                             increase_index();
                             break;
                         }
-                        else
-                            ++string_length;
 
                         increase_index();
                     }
 
                 if (*chr != opt) {
-                    *status = BRAMAJSON_JSON_NOT_VALID;
-                    break;
+                    goto brama_error;
                 }
 
+                string_length = (chr - context->json_content) - string_start;
                 string_in_buffer = true;
                 break;
             }
@@ -361,16 +335,6 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
                 object->next                = NULL;
                 object->_dictionary         = dict;
                 object->type                = BRAMAJSON_DICT;
-
-                CLEANUP_WHITESPACES();
-
-                /* Dictionary parse not finished yet */
-                if (*chr != '}')
-                    post_action = BRAMAJSON_POST_ACTION_ADD;
-                else {
-                    dict->closed = true;
-                    increase_index();
-                }
                 break;
             }
 
@@ -379,8 +343,7 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
                     BRAMAJSON_DICT  != last_object->type ||
                     true            == deliminator_used ||
                     (NULL != last_object->_dictionary->last_pair && NULL == last_object->_dictionary->last_pair->object)) {
-                    *status = BRAMAJSON_JSON_NOT_VALID;
-                    break;
+                    goto brama_error;
                 }
 
                 increase_index();
@@ -405,7 +368,7 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
                 size_t index             = 0;
                 bool isMinus             = false;
                 int dotPlace             = 0;
-                size_t start             = context->cursor_index;
+                size_t start             = chr - context->json_content;
                 bool isDouble            = false;
                 char32_t chNext          = get_next_char();
                 bool e_used              = false;
@@ -415,8 +378,7 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
                 while (!is_end()) {
                     if (*chr == '-') {
                         if (isMinus && !e_used) {
-                            *status = BRAMAJSON_JSON_NOT_VALID;
-                            break;
+                            goto brama_error;
                         }
 
                         isMinus = true;
@@ -424,8 +386,7 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
 
                     else if (*chr == '+') {
                         if (plus_used && !e_used){
-                            *status = BRAMAJSON_JSON_NOT_VALID;
-                            break;
+                            goto brama_error;
                         }
 
                         plus_used = true;
@@ -437,8 +398,7 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
 
                     else if (*chr == '.') {
                         if (isDouble) {
-                            *status = BRAMAJSON_JSON_NOT_VALID;
-                            break;
+                            goto brama_error;
                         }
 
                         isDouble = true;
@@ -484,26 +444,24 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
             case 'n': {
                 uint16_t type = BRAMAJSON_NULL;
 
-                if (0 == strncmp("false", context->cursor_index + context->json_content, 5)) {
+                if (0 == strncmp("false", (chr - context->json_content) + context->json_content, 5)) {
                     type = BRAMAJSON_FALSE;
-                    context->cursor_index +=5;
+                    chr +=5;
                 }
-                else if (0 == strncmp("true", context->cursor_index + context->json_content, 4)) {
+                else if (0 == strncmp("true", (chr - context->json_content) + context->json_content, 4)) {
                     type = BRAMAJSON_TRUE;
-                    context->cursor_index +=4;
+                    chr +=4;
                 }
-                else if (0 == strncmp("null", context->cursor_index + context->json_content, 4)) {
+                else if (0 == strncmp("null", (chr - context->json_content) + context->json_content, 4)) {
                     type = BRAMAJSON_NULL;
-                    context->cursor_index +=4;
-                } else
-                    *status = BRAMAJSON_JSON_NOT_VALID;
-
-                if (BRAMAJSON_SUCCESS == *status) {
-                    object         = (bramajson_object*)BRAMAJSON_MALLOC(sizeof(bramajson_object));
-                    object->next   = NULL;
-                    object->type   = type;
+                    chr +=4;
+                } else {
+                    goto brama_error;
                 }
 
+                object         = (bramajson_object*)BRAMAJSON_MALLOC(sizeof(bramajson_object));
+                object->next   = NULL;
+                object->type   = type;
                 break;
             }
 
@@ -513,13 +471,9 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
 
             /* Parse issue */
             default: {
-                *status = BRAMAJSON_JSON_NOT_VALID;
-                break;
+                goto brama_error;
             }
         }
-
-        /* Sometings went wrong, stop parser */
-        if (BRAMAJSON_SUCCESS != *status) break;
 
         /* Check upper object is container */
         if (NULL != last_object) {
@@ -563,8 +517,7 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
                         string_in_buffer = false;
                     }
                 } else {
-                    *status = BRAMAJSON_JSON_NOT_VALID;
-                    break;
+                    goto brama_error;
                 }
 
                 deliminator_used = false;
@@ -629,8 +582,7 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
 
                 if ((BRAMAJSON_ARRAY == last_object->type && false == last_object->_array->closed) ||
                     (BRAMAJSON_DICT  == last_object->type && false == last_object->_dictionary->closed)) {
-                    *status = BRAMAJSON_JSON_NOT_VALID;
-                    break;
+                    goto brama_error;
                 }
 
                 --stack_index;
@@ -640,18 +592,18 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
         }
     }
 
-    if (BRAMAJSON_SUCCESS == *status) {
-        if (NULL != object && ((BRAMAJSON_ARRAY == object->type && false == object->_array->closed) ||
-            (BRAMAJSON_DICT  == object->type && false == object->_dictionary->closed))) {
-            *status = BRAMAJSON_JSON_NOT_VALID;
-            return NULL;
-        }
-
-        if (NULL == stack[0] && NULL != object)
-            return object;
-        else
-            return stack[0];
+    if (NULL != object && ((BRAMAJSON_ARRAY == object->type && false == object->_array->closed) ||
+        (BRAMAJSON_DICT  == object->type && false == object->_dictionary->closed))) {
+        goto brama_error;
     }
+
+    if (NULL == stack[0] && NULL != object)
+        return object;
+    else
+        return stack[0];
+
+brama_error:
+    *status = BRAMAJSON_JSON_NOT_VALID;
     return NULL;
 }
 
