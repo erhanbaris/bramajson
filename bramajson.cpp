@@ -16,8 +16,25 @@ bramajson_object* BRAMAJSON_ARRAY_ASSERT(char const* json_content, int32_t expec
 
     assert(result                == expected);
     assert(output->type          == BRAMAJSON_ARRAY);
-    assert(output->_array->count == array_size);
+    size_t counter = 0;
+    bramajson_object* item = output->_array->head;
+    while(NULL != item) {
+        ++counter;
+        item = item->next;
+    }
+    assert(counter == array_size);
     return output;
+}
+
+void BRAMAJSON_ARRAY_SIZE_ASSERT(bramajson_object* output, size_t array_size) {
+    assert(output->type          == BRAMAJSON_ARRAY);
+    size_t counter = 0;
+    bramajson_object* item = output->_array->head;
+    while(NULL != item) {
+        ++counter;
+        item = item->next;
+    }
+    assert(counter == array_size);
 }
 
 char* ReadFile(char *filename)
@@ -62,18 +79,18 @@ char* ReadFile(char *filename)
 
 int main()
 {
-        char* content = ReadFile("/Users/erhanbaris/Downloads/citylots.json");
+        char* content = ReadFile("citylots.json");
         BRAMAJSON_VALIDATE_ASSERT(content, BRAMAJSON_SUCCESS);
 
         bramajson_object* output = NULL;
         BRAMAJSON_VALIDATE_ASSERT("{'erhan': 'test', 'baris': 'test'}", BRAMAJSON_SUCCESS);
 
         output = BRAMAJSON_ARRAY_ASSERT("[  true   ,false \r\n,\r\n1,1.2]", BRAMAJSON_SUCCESS, 4);
-        assert(output->_array->items[0]->type == BRAMAJSON_TRUE);
-        assert(output->_array->items[1]->type == BRAMAJSON_FALSE);
-        assert(output->_array->items[2]->type == BRAMAJSON_INT);
-        assert(output->_array->items[2]->_integer == 1);
-        assert(output->_array->items[3]->_double  ==  1.2);
+        assert(output->_array->head->type == BRAMAJSON_TRUE);
+        assert(output->_array->head->type == BRAMAJSON_FALSE);
+        assert(output->_array->head->next->type == BRAMAJSON_INT);
+        assert(output->_array->head->next->_integer == 1);
+        assert(output->_array->head->next->_double  ==  1.2);
 
         BRAMAJSON_VALIDATE_ASSERT("{}", BRAMAJSON_SUCCESS);
         BRAMAJSON_VALIDATE_ASSERT("{'erhan': 'test'}", BRAMAJSON_SUCCESS);
@@ -84,14 +101,14 @@ int main()
         BRAMAJSON_ARRAY_ASSERT("[true]", BRAMAJSON_SUCCESS, 1);
         BRAMAJSON_ARRAY_ASSERT("[true, false]", BRAMAJSON_SUCCESS, 2);
         output = BRAMAJSON_ARRAY_ASSERT("[[true, false]]", BRAMAJSON_SUCCESS, 1);
-        assert(output->_array->items[0]->type == BRAMAJSON_ARRAY);
-        assert(output->_array->items[0]->_array->count == 2);
+        assert(output->_array->head->type == BRAMAJSON_ARRAY);
+        BRAMAJSON_ARRAY_SIZE_ASSERT(output->_array->head, 2);
         
         output = BRAMAJSON_ARRAY_ASSERT("[[[true, false]]]", BRAMAJSON_SUCCESS, 1);
-        assert(output->_array->items[0]->type == BRAMAJSON_ARRAY);
-        assert(output->_array->items[0]->_array->count == 1);
-        assert(output->_array->items[0]->_array->items[0]->type == BRAMAJSON_ARRAY);
-        assert(output->_array->items[0]->_array->items[0]->_array->count == 2);
+        assert(output->_array->head->type == BRAMAJSON_ARRAY);
+        BRAMAJSON_ARRAY_SIZE_ASSERT(output->_array->head, 1);
+        assert(output->_array->head->_array->head->type == BRAMAJSON_ARRAY);
+        BRAMAJSON_ARRAY_SIZE_ASSERT(output->_array->head->_array->head, 2);
 
         BRAMAJSON_ARRAY_ASSERT("[true, false]", BRAMAJSON_SUCCESS, 2);
 
@@ -119,28 +136,35 @@ int main()
                               "}}", BRAMAJSON_SUCCESS);
 
     output = BRAMAJSON_ARRAY_ASSERT("[\"erhan\", \"baris\"]", BRAMAJSON_SUCCESS, 2);
-    assert(strcmp("erhan", output->_array->items[0]->_string) == 0);
-    assert(strcmp("baris", output->_array->items[1]->_string) == 0);
+    assert(strcmp("erhan", output->_array->head->_string) == 0);
+    assert(strcmp("baris", output->_array->head->next->_string) == 0);
+
 
     output = BRAMAJSON_ARRAY_ASSERT("[1,2,3,4]", BRAMAJSON_SUCCESS, 4);
-    assert(output->_array->items[0]->type == BRAMAJSON_INT);
-    assert(output->_array->items[1]->type == BRAMAJSON_INT);
-    assert(output->_array->items[2]->type == BRAMAJSON_INT);
-    assert(output->_array->items[3]->type == BRAMAJSON_INT);
-    assert(output->_array->items[0]->_integer == 1);
-    assert(output->_array->items[1]->_integer == 2);
-    assert(output->_array->items[2]->_integer == 3);
-    assert(output->_array->items[3]->_integer == 4);
+    assert(output->_array->head->type == BRAMAJSON_INT);
+    assert(output->_array->head->next->type == BRAMAJSON_INT);
+    assert(output->_array->head->next->next->type == BRAMAJSON_INT);
+    assert(output->_array->head->next->next->next->type == BRAMAJSON_INT);
+    assert(output->_array->head->_integer == 1);
+    assert(output->_array->head->next->_integer == 2);
+    assert(output->_array->head->next->next->_integer == 3);
+    assert(output->_array->head->next->next->next->_integer == 4);
+
+
+    output = BRAMAJSON_ARRAY_ASSERT("[true, false, null]", BRAMAJSON_SUCCESS, 3);
+    assert(output->_array->head->type == BRAMAJSON_TRUE);
+    assert(output->_array->head->next->type == BRAMAJSON_FALSE);
+    assert(output->_array->head->next->next->type == BRAMAJSON_NULL);
 
     output = BRAMAJSON_ARRAY_ASSERT("[[1],1]", BRAMAJSON_SUCCESS, 2);
-    assert(output->_array->items[0]->type == BRAMAJSON_ARRAY);
-    assert(output->_array->items[1]->type == BRAMAJSON_INT);
+    assert(output->_array->head->type == BRAMAJSON_ARRAY);
+    assert(output->_array->head->next->type == BRAMAJSON_INT);
 
-    assert(output->_array->items[0]->_array->count              == 1);
-    assert(output->_array->items[0]->_array->items[0]->type     == BRAMAJSON_INT);
-    assert(output->_array->items[0]->_array->items[0]->_integer == 1);
-    assert(output->_array->items[1]->type                       == BRAMAJSON_INT);
-    assert(output->_array->items[1]->_integer                   == 1);
+    BRAMAJSON_ARRAY_SIZE_ASSERT(output->_array->head, 1);
+    assert(output->_array->head->_array->head->type     == BRAMAJSON_INT);
+    assert(output->_array->head->_array->head->_integer == 1);
+    assert(output->_array->head->next->type                       == BRAMAJSON_INT);
+    assert(output->_array->head->next->_integer                   == 1);
 
 
     BRAMAJSON_VALIDATE_ASSERT(NULL, BRAMAJSON_CONTENT_EMPTY);
