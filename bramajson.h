@@ -1,6 +1,5 @@
-
-
-#pragma once
+#ifndef bramajson_h
+#define bramajson_h
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -49,21 +48,19 @@ typedef struct _bramajson_pair {
 } bramajson_pair;
 
 typedef struct _bramajson_array {
-    bool               closed;
     bramajson_object*  head;
     bramajson_object*  last;
+    bool               closed;
 } bramajson_array;
 
 typedef struct _bramajson_dictionary {
-    bool              closed;
     bramajson_pair*   head;
     bramajson_pair*   last;
     bramajson_pair*   last_pair;
+    bool              closed;
 } bramajson_dictionary;
 
 typedef struct _bramajson_object {
-    uint16_t          type;
-    bramajson_object* parent;
     bramajson_object* next;
     union
     {
@@ -74,6 +71,7 @@ typedef struct _bramajson_object {
         bramajson_dictionary * _dictionary;
         bramajson_array*       _array;
     };
+    uint16_t          type;
 } bramajson_object;
 
 
@@ -110,78 +108,6 @@ void* bramajson_malloc(bramajson_context* context, size_t size) {
     return (context->memory_block + (context->memory_count - size));
 }
 
-double naive (const char *p)
-{
-    int frac;
-    double sign, value, scale;
-
- 
-    // Get sign, if any.
-
-    sign = 1.0;
-    if (*p == '-') {
-        sign = -1.0;
-        p += 1;
-
-    } else if (*p == '+') {
-        p += 1;
-    }
-
-    // Get digits before decimal point or exponent, if any.
-
-    for (value = 0.0; valid_digit(*p); p += 1) {
-        value = value * 10.0 + (*p - '0');
-    }
-
-    // Get digits after decimal point, if any.
-
-    if (*p == '.') {
-        double pow10 = 10.0;
-        p += 1;
-        while (valid_digit(*p)) {
-            value += (*p - '0') / pow10;
-            pow10 *= 10.0;
-            p += 1;
-        }
-    }
-
-    // Handle exponent, if any.
-
-    frac = 0;
-    scale = 1.0;
-    if ((*p == 'e') || (*p == 'E')) {
-        unsigned int expon;
-
-        // Get sign of exponent, if any.
-
-        p += 1;
-        if (*p == '-') {
-            frac = 1;
-            p += 1;
-
-        } else if (*p == '+') {
-            p += 1;
-        }
-
-        // Get digits of exponent, if any.
-
-        for (expon = 0; valid_digit(*p); p += 1) {
-            expon = expon * 10 + (*p - '0');
-        }
-        if (expon > 308) expon = 308;
-
-        // Calculate scaling factor.
-
-        while (expon >= 50) { scale *= 1E50; expon -= 50; }
-        while (expon >=  8) { scale *= 1E8;  expon -=  8; }
-        while (expon >   0) { scale *= 10.0; expon -=  1; }
-    }
-
-    // Return signed and scaled floating point result.
-
-    return sign * (frac ? (value / scale) : (value * scale));
-}
-
 bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* status) {
     if (NULL == json_content || 0 == json_content[0]) {
         *status = BRAMAJSON_CONTENT_EMPTY;
@@ -216,7 +142,7 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
     size_t string_length  = 0;
     size_t string_start   = 0;
     bool string_in_buffer = false;
-    
+
     bool deliminator_used    = false;
     bramajson_object* object = NULL;
 
@@ -245,7 +171,7 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
 
             /* Finish array */
             case ']': {
-                if (NULL            == last_object || 
+                if (NULL            == last_object ||
                     BRAMAJSON_ARRAY != last_object->type ||
                     true            == deliminator_used) {
                     goto brama_error;
@@ -290,33 +216,61 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
             case '"':
             case'\'': {
                 char32_t opt  = *chr;
-
                 increase_index();
-                char chr_next = get_next_char();
                 string_start  = chr - context->json_content;
 
-                if (*chr == opt)
-                    increase_index();
-                else
-                    while (!is_end()) {
-                        chr_next = get_next_char();
-
-                        if (*chr == '\\' && chr_next == opt) {
-                            increase_index();
-                        }
-                        else if (*chr == opt) {
-                            break;
-                        }
-
+                if (*chr != opt)
+                    while (!is_end() && (*chr != opt || (*chr == '\\' &&  get_next_char() == opt)))
                         increase_index();
-                    }
 
                 if (*chr != opt) {
                     goto brama_error;
                 }
 
                 string_length = (chr - context->json_content) - string_start;
-                string_in_buffer = true;
+                increase_index();
+
+                if(BRAMAJSON_ARRAY == last_object->type) {
+                    object          = (bramajson_object*)BRAMAJSON_MALLOC(sizeof (bramajson_object));
+                    object->next    = NULL;
+                    object->type    = BRAMAJSON_STRING;
+                    object->_string = (char*)BRAMAJSON_MALLOC(sizeof(char) * string_length + 1);
+                    strncpy(object->_string, context->json_content + string_start, string_length);
+                    object->_string[string_length] = '\0';
+
+                    string_start     = 0;
+                    string_length    = 0;
+                    string_in_buffer = false;
+                }
+                else if (BRAMAJSON_DICT == last_object->type) {
+                    if (NULL == last_object->_dictionary->last_pair) {
+                        last_object->_dictionary->last_pair         = (bramajson_pair*)BRAMAJSON_MALLOC(sizeof(bramajson_pair));
+                        last_object->_dictionary->last_pair->next   = NULL;
+                        last_object->_dictionary->last_pair->key    = (char*)BRAMAJSON_MALLOC(sizeof(char) * string_length + 1);
+                        last_object->_dictionary->last_pair->object = NULL;
+                        strncpy(last_object->_dictionary->last_pair->key, context->json_content + string_start, string_length);
+                        last_object->_dictionary->last_pair->key[string_length] = '\0';
+
+                        string_start     = 0;
+                        string_length    = 0;
+                        string_in_buffer = false;
+                    } else {
+                        object          = (bramajson_object*)BRAMAJSON_MALLOC(sizeof (bramajson_object));
+                        object->next    = NULL;
+                        object->type    = BRAMAJSON_STRING;
+                        object->_string = (char*)BRAMAJSON_MALLOC(sizeof(char) * string_length + 1);
+                        strncpy(object->_string, context->json_content + string_start, string_length);
+                        object->_string[string_length] = '\0';
+
+                        string_start     = 0;
+                        string_length    = 0;
+                        string_in_buffer = false;
+                    }
+                } else {
+                    goto brama_error;
+                }
+
+                deliminator_used = false;
                 break;
             }
 
@@ -366,75 +320,82 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
             case '7':
             case '8':
             case '9': {
-                size_t index             = 0;
-                bool isMinus             = false;
-                int dotPlace             = 0;
-                size_t start             = chr - context->json_content;
-                bool isDouble            = false;
-                char32_t chNext          = get_next_char();
-                bool e_used              = false;
-                size_t e_after           = 0;
-                bool plus_used           = false;
+                bool is_double = false;
 
-                while (!is_end()) {
-                    if (*chr == '-') {
-                        if (isMinus && !e_used) {
-                            goto brama_error;
-                        }
+                int frac;
+                double sign, value, scale;
 
-                        isMinus = true;
-                    }
+                // Get sign, if any.
 
-                    else if (*chr == '+') {
-                        if (plus_used && !e_used){
-                            goto brama_error;
-                        }
-
-                        plus_used = true;
-                    }
-
-                    else if (index != 0 && (*chr == 'e' || *chr == 'E')) {
-                        e_used = true;
-                    }
-
-                    else if (*chr == '.') {
-                        if (isDouble) {
-                            goto brama_error;
-                        }
-
-                        isDouble = true;
-                    }
-
-                    else if (!e_used && (*chr >= '0' && *chr <= '9')) {
-                        if (isDouble)
-                            ++dotPlace;
-                    }
-
-                    else if (e_used && (*chr >= '0' && *chr <= '9')) {
-
-                        }
-                    else {
-                        break;
-                    }
-                    
+                sign = 1.0;
+                if (*chr == '-') {
+                    sign = -1.0;
                     increase_index();
-                    chNext = get_next_char();
-                    ++index;
+
+                } else if (*chr == '+') {
+                    increase_index();
                 }
 
-                char* tmp = (char*)BRAMAJSON_MALLOC(sizeof (char) * index + 1);
-                strncpy(tmp, context->json_content + start, index);
-                tmp[index] = '\0';
-                
+                // Get digits before decimal point or exponent, if any.
+
+                for (value = 0.0; valid_digit(*chr); chr += 1) {
+                    value = value * 10.0 + (*chr - '0');
+                }
+
+                // Get digits after decimal point, if any.
+
+                if (*chr == '.') {
+                    is_double = true;
+                    double pow10 = 10.0;
+                    increase_index();
+                    while (valid_digit(*chr)) {
+                        value += (*chr - '0') / pow10;
+                        pow10 *= 10.0;
+                        increase_index();
+                    }
+                }
+
+                frac = 0;
+                scale = 1.0;
+                if ((*chr == 'e') || (*chr == 'E')) {
+                    unsigned int expon;
+
+                    // Get sign of exponent, if any.
+
+                    increase_index();
+                    if (*chr == '-') {
+                        frac = 1;
+                        increase_index();
+
+                    } else if (*chr == '+') {
+                        increase_index();
+                    }
+
+                    // Get digits of exponent, if any.
+
+                    for (expon = 0; valid_digit(*chr); chr += 1) {
+                        expon = expon * 10 + (*chr - '0');
+                    }
+                    if (expon > 308) expon = 308;
+
+                    // Calculate scaling factor.
+
+                    while (expon >= 50) { scale *= 1E50; expon -= 50; }
+                    while (expon >=  8) { scale *= 1E8;  expon -=  8; }
+                    while (expon >   0) { scale *= 10.0; expon -=  1; }
+                }
+
+                // Return signed and scaled floating point result.
+
                 object = (bramajson_object*)BRAMAJSON_MALLOC(sizeof (bramajson_object));
                 object->next = NULL;
- 
-                if (!isDouble) {
+
+                if (!is_double) {
                     object->type     = BRAMAJSON_INT;
-                    object->_integer = naive(tmp);
+                    object->_integer = sign * (frac ? (value / scale) : (value * scale));
                 } else {
                     object->type    = BRAMAJSON_FLOAT;
-                    object->_double = naive(tmp);
+                    object->_double = sign * (frac ? (value / scale) : (value * scale));
                 }
                 break;
             }
@@ -478,56 +439,10 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
 
         /* Check upper object is container */
         if (NULL != last_object) {
-
-            /* String in fly */
-            if (true == string_in_buffer) {
-                if(BRAMAJSON_ARRAY == last_object->type) {
-                    object          = (bramajson_object*)BRAMAJSON_MALLOC(sizeof (bramajson_object));
-                    object->next    = NULL;
-                    object->type    = BRAMAJSON_STRING;
-                    object->_string = (char*)BRAMAJSON_MALLOC(sizeof(char) * string_length + 1);
-                    strncpy(object->_string, context->json_content + string_start, string_length);
-                    object->_string[string_length] = '\0';
-
-                    string_start     = 0;
-                    string_length    = 0;
-                    string_in_buffer = false;
-                }
-                else if (BRAMAJSON_DICT == last_object->type) {
-                    if (NULL == last_object->_dictionary->last_pair) {
-                        last_object->_dictionary->last_pair         = (bramajson_pair*)BRAMAJSON_MALLOC(sizeof(bramajson_pair));
-                        last_object->_dictionary->last_pair->next   = NULL;
-                        last_object->_dictionary->last_pair->key    = (char*)BRAMAJSON_MALLOC(sizeof(char) * string_length + 1);
-                        last_object->_dictionary->last_pair->object = NULL;
-                        strncpy(last_object->_dictionary->last_pair->key, context->json_content + string_start, string_length);
-                        last_object->_dictionary->last_pair->key[string_length] = '\0';
-
-                        string_start     = 0;
-                        string_length    = 0;
-                        string_in_buffer = false;
-                    } else {
-                        object          = (bramajson_object*)BRAMAJSON_MALLOC(sizeof (bramajson_object));
-                        object->next    = NULL;
-                        object->type    = BRAMAJSON_STRING;
-                        object->_string = (char*)BRAMAJSON_MALLOC(sizeof(char) * string_length + 1);
-                        strncpy(object->_string, context->json_content + string_start, string_length);
-                        object->_string[string_length] = '\0';
-
-                        string_start     = 0;
-                        string_length    = 0;
-                        string_in_buffer = false;
-                    }
-                } else {
-                    goto brama_error;
-                }
-
-                deliminator_used = false;
-            }
-
             /* Object created and can be added to container */
             if (NULL != object) {
                 switch (last_object->type) {
-                
+
                     /* Upper object is array*/
                     case BRAMAJSON_ARRAY: {
                         if (NULL == last_object->_array->head) {
@@ -538,7 +453,6 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
                             last_object->_array->last       = object;
                         }
 
-                        object->parent   = last_object;
                         deliminator_used = false;
                         break;
                     }
@@ -554,7 +468,6 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
 
                         last_object->_dictionary->last_pair->object = object;
 
-                        object->parent                                           = last_object;
                         last_object->_dictionary->last_pair                      = NULL;
                         deliminator_used                                         = false;
                         break;
@@ -594,7 +507,7 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
     }
 
     if (NULL != object && ((BRAMAJSON_ARRAY == object->type && false == object->_array->closed) ||
-        (BRAMAJSON_DICT  == object->type && false == object->_dictionary->closed))) {
+                           (BRAMAJSON_DICT  == object->type && false == object->_dictionary->closed))) {
         goto brama_error;
     }
 
@@ -603,7 +516,7 @@ bramajson_object* bramajson_parse_inner(char const* json_content, int32_t* statu
     else
         return stack[0];
 
-brama_error:
+    brama_error:
     *status = BRAMAJSON_JSON_NOT_VALID;
     return NULL;
 }
@@ -611,3 +524,5 @@ brama_error:
 bramajson_object* bramajson_parse(char const* json_content, int32_t* status) {
     return bramajson_parse_inner(json_content, status);
 }
+
+#endif
